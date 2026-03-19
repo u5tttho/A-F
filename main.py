@@ -1,26 +1,34 @@
 import discord
-from discord.ext import commands
 import datetime
 import json
 import aiohttp
+import os
 import asyncio
+from flask import Flask
+from threading import Thread
+
+# ===================== WEB SERVER (لإبقاء المشروع حياً على رندر) =====================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "✅ Discord Forensics Monitor is actively running on Render!"
+
+def run_server():
+    # Render يعين رقم بورت تلقائي، يجب أن نستمع له
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
 
 # ===================== CONFIGURATION =====================
-# ملاحظة: للحصول على التوكن، يتم استخراجه من الـ Console الخاص بالمتصفح (Network tab)
-USER_TOKEN     = "YOUR_USER_TOKEN_HERE" 
-TARGET_USER_ID = 123456789012345678       
-WEBHOOK_URL    = "YOUR_WEBHOOK_URL_HERE"  
+# سحب البيانات الحساسة من متغيرات البيئة بدلاً من الكود المباشر
+USER_TOKEN     = os.environ.get("USER_TOKEN")
+TARGET_USER_ID = int(os.environ.get("TARGET_USER_ID", 0))
+WEBHOOK_URL    = os.environ.get("WEBHOOK_URL")
 LOG_FILE       = "forensics_log.json"
 # =========================================================
 
-# استخدام مكتبة discord.py-self
-# تثبيت: pip install discord.py-self
 client = discord.Client()
 events_log = []
-
-# ============================================================
-# أدوات مساعدة (نفس المنطق السابق مع تحسين التوافق)
-# ============================================================
 
 def save_event(event_type: str, details: dict):
     event = {
@@ -37,7 +45,7 @@ def save_event(event_type: str, details: dict):
     return event
 
 async def send_webhook(embed_data: dict):
-    """إرسال تنبيه عبر Webhook"""
+    if not WEBHOOK_URL: return
     async with aiohttp.ClientSession() as session:
         payload = {"embeds": [embed_data]}
         await session.post(WEBHOOK_URL, json=payload)
@@ -52,25 +60,20 @@ def make_embed(title: str, color: int, fields: list) -> dict:
         "color": color,
         "fields": [{"name": f["name"], "value": str(f["value"]), "inline": f.get("inline", True)} for f in fields],
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "footer": {"text": "🔍 User-Level Forensics | KAU Research"}
+        "footer": {"text": "🔍 User-Level Forensics | Project Monitor"}
     }
 
-# ============================================================
-# الأحداث (Events)
-# ============================================================
+# ===================== EVENTS =====================
 
 @client.event
 async def on_ready():
-    print(f"✅ تم تسجيل الدخول كحساب شخصي: {client.user}")
-    print(f"🔍 مراقبة الهدف: {TARGET_USER_ID}")
-    print("---")
+    print(f"✅ تم تسجيل الدخول بنجاح: {client.user}")
+    print(f"🔍 جاري مراقبة الهدف: {TARGET_USER_ID}")
 
 @client.event
 async def on_voice_state_update(member, before, after):
-    if member.id != TARGET_USER_ID:
-        return
+    if member.id != TARGET_USER_ID: return
 
-    # منطق المراقبة الصوتية (نفس الكود السابق يعمل هنا)
     if before.channel != after.channel:
         if after.channel:
             details = {"action": "Join/Move", "channel": after.channel.name, "guild": after.channel.guild.name}
@@ -84,44 +87,38 @@ async def on_voice_state_update(member, before, after):
 
 @client.event
 async def on_message(message):
-    # في الحساب الشخصي، يمكنك مراقبة حتى الرسائل الخاصة (DMs) التي يراها حسابك
-    if message.author.id != TARGET_USER_ID:
-        return
+    if message.author.id != TARGET_USER_ID: return
 
     is_dm = isinstance(message.channel, discord.DMChannel)
     loc = "Direct Message" if is_dm else f"Guild: {message.guild.name} | Channel: {message.channel.name}"
 
-    save_event("MESSAGE_SENT", {
-        "location": loc,
-        "length": len(message.content),
-        "has_attachments": bool(message.attachments)
-    })
-
+    save_event("MESSAGE_SENT", {"location": loc, "length": len(message.content)})
     embed = make_embed("📝 رسالة صادرة من الهدف", 0x3498db, [
         {"name": "الموقع", "value": loc},
-        {"name": "محتوى (Length)", "value": f"{len(message.content)} chars"}
+        {"name": "حجم الرسالة", "value": f"{len(message.content)} حرف"}
     ])
     await send_webhook(embed)
 
 @client.event
 async def on_typing(channel, user, when):
-    if user.id != TARGET_USER_ID:
-        return
+    if user.id != TARGET_USER_ID: return
     
-    embed = make_embed("⌨️ بدأ الكتابة", 0xf1c40f, [
-        {"name": "القناة", "value": str(channel)}
-    ])
+    embed = make_embed("⌨️ بدأ الكتابة", 0xf1c40f, [{"name": "القناة", "value": str(channel)}])
     await send_webhook(embed)
 
-# ============================================================
-# التشغيل
-# ============================================================
+# ===================== MAIN EXECUTION =====================
 
 if __name__ == "__main__":
-    # ملاحظة: في discord.py-self، نستخدم bot=False
-    try:
-        client.run(USER_TOKEN, bot=False)
-    except discord.LoginFailure:
-        print("❌ فشل تسجيل الدخول: التوكن غير صحيح.")
-    except Exception as e:
-        print(f"❌ حدث خطأ: {e}")
+    if not USER_TOKEN or not TARGET_USER_ID:
+        print("❌ خطأ: المتغيرات (USER_TOKEN) أو (TARGET_USER_ID) غير موجودة.")
+    else:
+        # 1. تشغيل خادم الويب في مسار (Thread) منفصل
+        Thread(target=run_server, daemon=True).start()
+        
+        # 2. تشغيل بوت المراقبة
+        try:
+            client.run(USER_TOKEN, bot=False)
+        except discord.LoginFailure:
+            print("❌ فشل تسجيل الدخول: التوكن غير صحيح أو الحساب تبند.")
+        except Exception as e:
+            print(f"❌ حدث خطأ غير متوقع: {e}")
