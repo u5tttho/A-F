@@ -1,7 +1,7 @@
 module.exports = {
-  token: "BOT_TOKEN_HERE",
-  prefix: "!",
-  ownerId: "YOUR_DISCORD_ID",
+  token: process.env.TOKEN,
+  prefix: process.env.PREFIX || "!",
+  ownerId: process.env.OWNER_ID,
   colors: {
     main: "#5865F2",
     success: "#57F287",
@@ -9,4 +9,4 @@ module.exports = {
     warning: "#FEE75C",
     info: "#00B0F4"
   }
-};
+}
